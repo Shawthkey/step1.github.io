@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Chip Lab · 加速器 Runtime 与调度</title>
+  <meta name="description" content="交互式学习 AI 加速器的架构、任务下发、依赖同步与多芯片通信。">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23060a12'/%3E%3Cpath d='M16 6l9 10-9 10-9-10z' fill='none' stroke='%2322d3ee' stroke-width='2'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <!-- ── Sidebar ─────────────────────────────────────────── -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"><span></span></div>
+        <div class="brand-text">
+          <h1>AI Chip Lab</h1>
+          <p>Runtime &amp; Scheduling</p>
+        </div>
+      </div>
+
+      <div class="side-scroll">
+        <section class="side-section">
+          <div class="side-label">学习路径</div>
+          <nav id="view-nav" class="view-nav">
+            <button data-view="overview" class="active">芯片总览</button>
+            <button data-view="chip" id="nav-chip">单芯片实验室 <span class="nav-caret">⌄</span></button>
+            <div id="chip-subnav" class="chip-subnav hidden">
+              <div class="side-label">选择芯片 <span>05</span></div>
+              <div id="chip-list" class="chip-list"></div>
+            </div>
+            <button data-view="compare">多芯片对比</button>
+            <button data-view="unified">统一模型 · 8 卡</button>
+            <button data-view="runtime">Runtime 能力</button>
+          </nav>
+        </section>
+
+        <section class="side-section" id="concept-section">
+          <div class="side-label">学习视角 <span>点击高亮</span></div>
+          <div id="concept-list" class="concept-list"></div>
+        </section>
+
+        <section class="side-section">
+          <div class="side-label">颜色图例</div>
+          <div id="legend" class="legend"></div>
+        </section>
+      </div>
+
+      <div class="side-foot">
+        <span class="live-dot"></span>
+        <span>悬停看功能 · 滚轮缩放 · 中键拖动画幅</span>
+      </div>
+    </aside>
+
+    <!-- ── Main ────────────────────────────────────────────── -->
+    <main class="main">
+      <header class="topbar">
+        <div class="chip-heading">
+          <div class="eyebrow" id="chip-vendor">NVIDIA · HOPPER</div>
+          <h2 id="chip-title">H100 GPU</h2>
+          <p id="chip-tagline">Host 驱动 + GSP 固件 + SM 硬件调度</p>
+        </div>
+        <div class="top-actions">
+          <div class="status-pill" id="status-pill"><span class="status-dot"></span><span id="status-text">空闲</span></div>
+          <button class="icon-btn focus-btn" id="btn-focus" title="专注模式（Esc 退出）" aria-label="专注模式">⛶ <span>专注</span></button>
+          <button class="icon-btn" id="btn-help" title="使用说明" aria-label="使用说明">?</button>
+        </div>
+      </header>
+
+      <div id="view-chip" class="view hidden">
+      <section class="stage">
+        <div class="stage-toolbar">
+          <div class="now" id="now">
+            <span class="now-phase" id="now-phase">READY</span>
+            <div class="now-copy">
+              <strong id="now-title">点击“下发任务”开始</strong>
+              <span id="now-detail">观察 Host → 控制 → 计算 → 同步 → 通信 的完整链路</span>
+            </div>
+          </div>
+          <div class="controls">
+            <button id="btn-launch" class="btn primary">▶ 下发任务</button>
+            <button id="btn-step" class="btn">单步</button>
+            <button id="btn-reset" class="btn">重置任务</button>
+            <button id="btn-reset-view" class="btn" title="重置缩放与平移">重置画幅</button>
+            <label class="speed">
+              <span>速度</span>
+              <input id="speed" type="range" min="0.5" max="2" step="0.25" value="1" aria-label="播放速度">
+              <span id="speed-val">1.0×</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="canvas-wrap" id="canvas-wrap">
+          <svg id="arch-svg" viewBox="0 40 1160 650" role="img" aria-label="AI 芯片架构图"></svg>
+          <div id="tooltip" class="tooltip" role="tooltip"></div>
+        </div>
+
+        <div class="rank-strip" id="rank-strip"></div>
+      </section>
+
+      <section class="lower">
+        <div class="panel task-panel">
+          <div class="panel-head">
+            <span>任务图 / 依赖 <em class="model-tag">DeepSeek-R1-Distill-Qwen-32B · TP=8</em></span>
+            <span class="pill" id="task-progress">0 / 8</span>
+          </div>
+          <div class="task-scroll">
+            <svg id="task-svg" viewBox="0 0 960 120" role="img" aria-label="任务依赖图"></svg>
+          </div>
+        </div>
+
+        <div class="panel log-panel">
+          <div class="panel-head">
+            <span>执行日志</span>
+            <button id="btn-clear-log" class="ghost">清空</button>
+          </div>
+          <div id="log" class="log" aria-live="polite"></div>
+        </div>
+      </section>
+      </div>
+
+      <section id="view-overview" class="view hidden">
+        <div class="view-head">
+          <div>
+            <div class="eyebrow">START HERE</div>
+            <h3>五颗芯片，五种控制方式</h3>
+            <p>先看总览，再进入单芯片实验室。点击芯片卡片展开预览，再决定看哪一颗。</p>
+          </div>
+          <div class="view-head-actions">
+            <button class="btn primary" data-view="chip">进入单芯片实验室</button>
+          </div>
+        </div>
+        <div id="overview-grid" class="overview-grid"></div>
+      </section>
+
+      <section id="view-compare" class="view hidden">
+        <div class="view-head">
+          <div>
+            <div class="eyebrow">SIDE BY SIDE</div>
+            <h3>多芯片对比</h3>
+            <p>同一组问题：谁下发、谁调度、谁管依赖、谁发起通信、谁支持静态产物。</p>
+          </div>
+          <div class="compare-selects">
+            <select id="compare-a" aria-label="芯片 A"></select>
+            <span>vs</span>
+            <select id="compare-b" aria-label="芯片 B"></select>
+          </div>
+        </div>
+        <div class="compare-mini-grid">
+          <div id="compare-left" class="compare-card"></div>
+          <div id="compare-right" class="compare-card"></div>
+        </div>
+        <div id="compare-conclusion" class="compare-conclusion hidden"></div>
+        <div id="compare-table" class="compare-table"></div>
+      </section>
+
+      <section id="view-unified" class="view hidden">
+        <div class="view-head">
+          <div>
+            <div class="eyebrow">ONE MODEL · 8 CARDS</div>
+            <h3>统一模型多芯片协同</h3>
+            <p id="unified-sub">DeepSeek-V2-Lite · Attention TP=8 + MoE EP=8</p>
+          </div>
+          <div class="view-head-actions">
+            <button id="unified-play" class="btn primary">▶ 播放一层</button>
+            <button id="unified-reset" class="btn">重置</button>
+          </div>
+        </div>
+        <div id="unified-facts" class="unified-facts"></div>
+
+        <div class="data-demo">
+          <div class="data-head">
+            <div>
+              <div class="eyebrow">8×8 TOY MATRIX · TP DEMO</div>
+              <h4>数据怎样被切分、计算、AllReduce</h4>
+            </div>
+            <div class="data-actions">
+              <button id="data-play" class="btn primary">▶ 播放数据流</button>
+              <button id="data-step" class="btn">单步</button>
+              <button id="data-reset" class="btn">重置</button>
+            </div>
+          </div>
+          <div class="data-body">
+            <div class="data-matrix-wrap">
+              <div id="data-matrix" class="data-matrix"></div>
+              <div id="data-legend" class="data-legend"></div>
+            </div>
+            <div class="data-side">
+              <div class="data-rank-label">TOY TP RANKS · 8 卡按列切分</div>
+              <div id="data-ranks" class="data-ranks"></div>
+              <div id="data-explain" class="data-explain"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="unified-layout">
+          <div id="unified-pipeline" class="unified-pipeline"></div>
+          <div class="unified-side">
+            <div class="unified-rank-label">MODEL RANKS · Attention TP=8 / MoE EP=8</div>
+            <div id="unified-ranks" class="unified-ranks"></div>
+            <div id="unified-detail" class="unified-detail"></div>
+            <div id="unified-actors" class="unified-actors"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-runtime" class="view hidden">
+        <div class="view-head">
+          <div>
+            <div class="eyebrow">STATIC ARTIFACTS</div>
+            <h3>Runtime 需要什么能力</h3>
+            <p>静态指令流、静态任务图、编译产物不是同一件事；能力需求要按产物和 runtime 分别判断。</p>
+          </div>
+        </div>
+        <div id="runtime-artifacts" class="artifact-grid"></div>
+        <div id="runtime-matrix" class="runtime-matrix"></div>
+        <div id="runtime-notes" class="runtime-notes"></div>
+      </section>
+    </main>
+
+    <!-- ── Inspector ───────────────────────────────────────── -->
+    <aside class="inspector" id="inspector"></aside>
+  </div>
+
+  <!-- ── Help modal ────────────────────────────────────────── -->
+  <div id="help-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="help-title">
+    <div class="modal-card">
+      <button class="modal-close" id="btn-close-help" aria-label="关闭">×</button>
+      <div class="modal-kicker">HOW TO USE</div>
+      <h3 id="help-title">把架构图和执行链路连起来看</h3>
+      <div class="help-grid">
+        <div><b>01 选路径</b><p>左侧五个入口：芯片总览、单芯片实验室、多芯片对比、统一模型 · 8 卡、Runtime 能力。先看总览，再进单芯片。</p></div>
+        <div><b>02 看模块</b><p>悬停任意模块，高亮并显示功能；点击锁定，右侧展开内部结构、关键事实和相关术语。Host 用户态、kernel driver、设备控制、PE 是分开的。</p></div>
+        <div><b>03 学概念</b><p>点击“发射 / 驱动 / 控制 / 依赖 / 同步 / 通信”，相关模块一起高亮，右侧给出当前芯片上的具体对应物。</p></div>
+        <div><b>04 跑任务</b><p>点击“下发任务”，观察一层 decode 如何从 Host 用户态 → kernel driver → 设备控制/调度 → PE 计算 → barrier → all-reduce。</p></div>
+        <div><b>05 画幅 / 数据流</b><p>单芯片画布支持滚轮缩放、中键拖动和“重置画幅”；统一模型板块用 8×8 矩阵播放切分 / partial / AllReduce。</p></div>
+      </div>
+      <div class="modal-note">颜色按“控制 / 计算 / 存储 / 互联 / 同步 / 驱动”分组；同一色系代表同一类职责。对比、统一模型、runtime 能力是三个独立板块，不挤在单芯片图里。</div>
+    </div>
+  </div>
+
+  <!-- ── Chip preview modal ─────────────────────────────────── -->
+  <div id="chip-preview" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="preview-title">
+    <div class="modal-card chip-preview-card">
+      <button class="modal-close" id="btn-close-preview" aria-label="关闭">×</button>
+      <div class="preview-grid">
+        <div id="preview-mini" class="preview-mini"></div>
+        <div class="preview-copy">
+          <div class="modal-kicker">SINGLE-CHIP PREVIEW</div>
+          <h3 id="preview-title">H100 GPU</h3>
+          <p id="preview-tagline"></p>
+          <div id="preview-specs" class="preview-specs"></div>
+          <div id="preview-chain" class="preview-chain"></div>
+          <div class="preview-actions">
+            <button id="preview-enter" class="btn primary">进入单芯片实验室</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
